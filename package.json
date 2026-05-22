@@ -1,0 +1,16 @@
+{
+  "name": "forms-automator",
+  "version": "1.0.0",
+  "description": "Google Forms Automator — Portable Desktop App",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:client": "cd client && npm run build",
+    "build:portable": "node build-portable.js",
+    "dev:server": "cd server && npm start",
+    "dev:client": "cd client && npm run dev"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}
