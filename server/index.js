@@ -460,7 +460,7 @@ async function executeMission(state, submitUrl, delayMs, questions) {
 // ─── Catch-all: SPA fallback ─────────────────────────────────────────────────
 // Cualquier ruta que NO sea /api/* se redirige al index.html del frontend.
 // Esto permite que React Router (si se usa) maneje las rutas del lado del cliente.
-app.get('*', (req, res) => {
+app.use((req, res, next) => {
   const indexPath = path.join(clientDistPath, 'index.html');
   res.sendFile(indexPath, (err) => {
     if (err) {
@@ -486,13 +486,17 @@ function openBrowser(url) {
 }
 
 // ─── Inicio del servidor ────────────────────────────────────────────────────
-app.listen(PORT, () => {
-  const url = `http://localhost:${PORT}`;
-  console.log(`[Forms Automator] Backend activo en ${url}`);
-  console.log(`[Forms Automator] Sirviendo frontend desde: ${clientDistPath}`);
-  // Abrir navegador automáticamente solo en modo portable (pkg)
-  if (isPkg) {
-    console.log('[Forms Automator] Abriendo navegador...');
-    openBrowser(url);
-  }
-});
+if (process.env.NODE_ENV !== 'test') {
+  app.listen(PORT, () => {
+    const url = `http://localhost:${PORT}`;
+    console.log(`[Forms Automator] Backend activo en ${url}`);
+    console.log(`[Forms Automator] Sirviendo frontend desde: ${clientDistPath}`);
+    // Abrir navegador automáticamente solo en modo portable (pkg)
+    if (isPkg) {
+      console.log('[Forms Automator] Abriendo navegador...');
+      openBrowser(url);
+    }
+  });
+}
+
+export default app;
