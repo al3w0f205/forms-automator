@@ -42,59 +42,11 @@ function QuestionConfigurator({ question, config, onChange }) {
     onChange({ ...config, mode });
   };
 
-  // Cambio directo de peso (sin normalización — para checkbox)
+  // Cambio directo de peso
   const handleWeightDirect = (index, weight) => {
-    const val = Math.max(0, Math.min(100, Number(weight) || 0));
+    const val = weight === '' ? '' : Math.max(0, Number(weight) || 0);
     const newOptions = config.options.map((o) => ({ ...o }));
     newOptions[index].weight = val;
-    onChange({ ...config, options: newOptions });
-  };
-
-  // Cambio con auto-normalización (radio/dropdown/scale → suma = 100)
-  const handleWeightNormalized = (index, weight) => {
-    const val = Math.max(0, Math.min(100, Number(weight) || 0));
-    const newOptions = config.options.map((o) => ({ ...o }));
-    const oldWeight = newOptions[index].weight;
-    newOptions[index].weight = val;
-
-    const delta = val - oldWeight;
-    const othersTotal = newOptions.reduce((s, o, i) => i !== index ? s + o.weight : s, 0);
-
-    if (othersTotal > 0 && delta !== 0) {
-      const scale = Math.max(0, othersTotal - delta) / othersTotal;
-      let distributed = 0;
-      newOptions.forEach((opt, i) => {
-        if (i !== index) {
-          opt.weight = Math.max(0, Math.round(opt.weight * scale));
-          distributed += opt.weight;
-        }
-      });
-      // Corregir redondeo: ajustar el primer "otro" para que sume exactamente 100
-      const targetOthers = 100 - val;
-      if (distributed !== targetOthers && newOptions.length > 1) {
-        const firstOther = newOptions.findIndex((_, i) => i !== index);
-        if (firstOther !== -1) {
-          newOptions[firstOther].weight = Math.max(0, newOptions[firstOther].weight + (targetOthers - distributed));
-        }
-      }
-    } else if (othersTotal === 0 && newOptions.length > 1) {
-      // Todos los demás en 0: distribuir el restante equitativamente
-      const remaining = Math.max(0, 100 - val);
-      const perOther = Math.floor(remaining / (newOptions.length - 1));
-      let given = 0;
-      newOptions.forEach((opt, i) => {
-        if (i !== index) {
-          opt.weight = perOther;
-          given += perOther;
-        }
-      });
-      // Ajuste por redondeo
-      const firstOther = newOptions.findIndex((_, i) => i !== index);
-      if (firstOther !== -1 && given !== remaining) {
-        newOptions[firstOther].weight += remaining - given;
-      }
-    }
-
     onChange({ ...config, options: newOptions });
   };
 
@@ -131,12 +83,41 @@ function QuestionConfigurator({ question, config, onChange }) {
     onChange({ ...config, options: newOptions });
   };
 
+  // Normalizar pesos de manera balanceada a 100%
+  const normalizeWeights = () => {
+    const total = config.options.reduce((s, o) => s + (Number(o.weight) || 0), 0);
+    if (total === 0) {
+      applyPreset('equal');
+      return;
+    }
+    const newOptions = config.options.map((o) => ({ ...o }));
+    let distributed = 0;
+    newOptions.forEach((opt) => {
+      opt.weight = Math.round(((Number(opt.weight) || 0) / total) * 100);
+      distributed += opt.weight;
+    });
+    // Ajustar por redondeo sumando la diferencia al de mayor peso
+    if (distributed !== 100 && newOptions.length > 0) {
+      let maxIdx = 0;
+      let maxVal = -1;
+      newOptions.forEach((opt, idx) => {
+        const val = Number(opt.weight) || 0;
+        if (val > maxVal) {
+          maxVal = val;
+          maxIdx = idx;
+        }
+      });
+      newOptions[maxIdx].weight = Math.max(0, (Number(newOptions[maxIdx].weight) || 0) + (100 - distributed));
+    }
+    onChange({ ...config, options: newOptions });
+  };
+
   const handleFixedChange = (e) => {
     onChange({ ...config, fixedValue: e.target.value });
   };
 
   // Cálculos derivados
-  const totalWeight = config.options.reduce((s, o) => s + (o.weight || 0), 0);
+  const totalWeight = config.options.reduce((s, o) => s + (Number(o.weight) || 0), 0);
 
   // Modos disponibles según tipo
   const modes = [];
@@ -178,7 +159,7 @@ function QuestionConfigurator({ question, config, onChange }) {
         </div>
       </div>
 
-      {/* ── Modo ponderado (mejorado) ── */}
+      {/* ── Modo ponderado ── */}
       {isOptionType && config.mode === 'weighted' && (
         <div className="weight-config">
           {/* Presets + total */}
@@ -200,6 +181,12 @@ function QuestionConfigurator({ question, config, onChange }) {
               Reset
             </button>
             {!isCheckbox && (
+              <button className="preset-btn preset-btn-ghost" onClick={normalizeWeights} title="Normalizar pesos para que sumen 100%">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M12 5v14M5 12h14"/></svg>
+                Normalizar
+              </button>
+            )}
+            {!isCheckbox && (
               <span className={`weight-total ${totalWeight === 100 ? 'balanced' : totalWeight > 100 ? 'over' : 'under'}`}>
                 Σ {totalWeight}%
               </span>
@@ -210,7 +197,7 @@ function QuestionConfigurator({ question, config, onChange }) {
           {!isCheckbox && totalWeight > 0 && (
             <div className="distribution-bar">
               {config.options.map((opt, i) => {
-                const pct = (opt.weight / totalWeight) * 100;
+                const pct = ((Number(opt.weight) || 0) / totalWeight) * 100;
                 return pct > 0 ? (
                   <div
                     key={i}
@@ -239,7 +226,7 @@ function QuestionConfigurator({ question, config, onChange }) {
                   <div
                     className="option-bar-fill"
                     style={{
-                      width: `${Math.min(100, opt.weight)}%`,
+                      width: `${Math.min(100, Number(opt.weight) || 0)}%`,
                       backgroundColor: OPTION_COLORS[i % OPTION_COLORS.length],
                     }}
                   />
@@ -248,14 +235,16 @@ function QuestionConfigurator({ question, config, onChange }) {
                   type="number"
                   className="option-weight-input"
                   min="0"
-                  max="100"
                   value={opt.weight}
                   onChange={(e) => {
-                    const val = Math.max(0, Math.min(100, Number(e.target.value) || 0));
-                    isCheckbox ? handleWeightDirect(i, val) : handleWeightNormalized(i, val);
+                    const rawVal = e.target.value;
+                    const val = rawVal === '' ? '' : Math.max(0, Number(rawVal) || 0);
+                    handleWeightDirect(i, val);
                   }}
                 />
-                <span className="option-weight-unit">%</span>
+                <span className="option-weight-unit">
+                  {totalWeight > 0 ? `(${Math.round(((Number(opt.weight) || 0) / totalWeight) * 100)}%)` : '(0%)'}
+                </span>
               </div>
             ))}
           </div>
@@ -269,8 +258,40 @@ function QuestionConfigurator({ question, config, onChange }) {
         </div>
       )}
 
-      {/* Valor fijo para opciones */}
-      {isOptionType && config.mode === 'fixed' && (
+      {/* Valor fijo para checkboxes (casillas) */}
+      {question.type === 'checkbox' && config.mode === 'fixed' && (
+        <div className="fixed-checkbox-group">
+          {question.options.map((opt, i) => {
+            const isChecked = Array.isArray(config.fixedValue)
+              ? config.fixedValue.includes(opt)
+              : config.fixedValue === opt;
+            return (
+              <label key={i} className="fixed-checkbox-item">
+                <input
+                  type="checkbox"
+                  checked={isChecked}
+                  onChange={(e) => {
+                    const currentValues = Array.isArray(config.fixedValue)
+                      ? [...config.fixedValue]
+                      : config.fixedValue ? [config.fixedValue] : [];
+                    let newValues;
+                    if (e.target.checked) {
+                      newValues = [...currentValues, opt];
+                    } else {
+                      newValues = currentValues.filter((v) => v !== opt);
+                    }
+                    onChange({ ...config, fixedValue: newValues });
+                  }}
+                />
+                <span>{opt}</span>
+              </label>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Valor fijo para otras opciones (radio, dropdown, scale) */}
+      {question.type !== 'checkbox' && isOptionType && config.mode === 'fixed' && (
         <select
           className="fixed-input"
           value={config.fixedValue || ''}
@@ -516,7 +537,7 @@ function App() {
     if (!form) return;
     setError('');
 
-    // Validar que preguntas requeridas no estén en skip
+    // Validar que preguntas requeridas no estén en skip ni tengan valores fijos vacíos
     for (let i = 0; i < form.questions.length; i++) {
       const q = form.questions[i];
       const c = configs[i];
@@ -524,19 +545,35 @@ function App() {
         setError(`La pregunta "${q.title}" es requerida y no puede omitirse.`);
         return;
       }
-      if (c.mode === 'fixed' && HAS_TEXT.includes(q.type) && !c.fixedValue) {
-        setError(`La pregunta "${q.title}" requiere un valor fijo.`);
-        return;
+      if (q.required && c.mode === 'fixed') {
+        if (q.type === 'checkbox') {
+          const hasSelection = Array.isArray(c.fixedValue)
+            ? c.fixedValue.length > 0
+            : !!c.fixedValue;
+          if (!hasSelection) {
+            setError(`La pregunta "${q.title}" (casillas) es requerida y requiere al menos una opción seleccionada.`);
+            return;
+          }
+        } else if (!c.fixedValue) {
+          setError(`La pregunta "${q.title}" requiere un valor fijo.`);
+          return;
+        }
       }
     }
 
-    // Preparar configs para envío: en modo random, asignar pesos iguales
+    // Preparar configs para envío: mapear pesos vacíos a 0 y en modo random asignar pesos iguales
     const questionsPayload = configs.map((c) => {
       if (c.mode === 'random') {
         const equalWeight = c.options.length > 0 ? 100 / c.options.length : 0;
         return {
           ...c,
           options: c.options.map((o) => ({ ...o, weight: equalWeight })),
+        };
+      }
+      if (c.options && c.options.length > 0) {
+        return {
+          ...c,
+          options: c.options.map((o) => ({ ...o, weight: Number(o.weight) || 0 })),
         };
       }
       return c;
