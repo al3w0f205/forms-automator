@@ -1,9 +1,17 @@
 import express from 'express';
 import cors from 'cors';
-import axios from 'axios';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { exec } from 'child_process';
+
+// ─── Módulos de plataformas ──────────────────────────────────────────────────
+import { analyzeGoogleForm, submitGoogleForm } from './googleForms.js';
+import {
+  isMicrosoftFormsUrl,
+  analyzeMicrosoftForm,
+  submitMicrosoftForm,
+  refreshMsToken,
+} from './microsoftForms.js';
 
 // ─── Resolución de __dirname para ESM y CJS ─────────────────────────────────
 // En CJS (bundle de esbuild): __dirname está disponible nativamente
@@ -32,140 +40,28 @@ app.use(express.static(clientDistPath));
 // ─── Estado global de misiones ───────────────────────────────────────────────
 const missions = new Map();
 
-// ─── Utilidades ──────────────────────────────────────────────────────────────
+// ─── Detección de plataforma ─────────────────────────────────────────────────
 
 /**
- * Extrae el formId de una URL de Google Forms.
- * Soporta formatos /forms/d/e/XXXXX y /forms/d/XXXXX
+ * Detecta si una URL es de Google Forms o Microsoft Forms.
+ * @returns {'google' | 'microsoft' | null}
  */
-function extractFormId(url) {
-  const match = url.match(/\/forms\/d\/e?\/?([a-zA-Z0-9_-]+)/);
-  return match ? match[1] : null;
-}
+function detectPlatform(url) {
+  if (!url) return null;
+  const lower = url.toLowerCase();
 
-/**
- * Resuelve URLs cortas (forms.gle) siguiendo redirects.
- * Devuelve la URL final completa de docs.google.com.
- */
-async function resolveUrl(url) {
-  // Si ya es una URL de docs.google.com, devolverla tal cual
-  if (url.includes('docs.google.com/forms')) return url;
+  // Google Forms
+  if (lower.includes('docs.google.com/forms') ||
+      lower.includes('forms.gle/')) {
+    return 'google';
+  }
 
-  // Para forms.gle u otras URLs cortas, seguir redirects
-  try {
-    const response = await axios.get(url, {
-      maxRedirects: 5,
-      headers: { 'User-Agent': 'Mozilla/5.0' },
-    });
-    // axios sigue redirects automáticamente; la URL final está en:
-    const finalUrl = response.request?.res?.responseUrl || response.config?.url;
-    return finalUrl || url;
-  } catch {
-    return url;
+  // Microsoft Forms
+  if (isMicrosoftFormsUrl(url)) {
+    return 'microsoft';
   }
-}
 
-/**
- * Determina la URL base correcta para envío.
- * Google Forms tiene dos formatos de URL:
- * - /forms/d/e/FORM_ID/viewform  (publicadas con /e/)
- * - /forms/d/FORM_ID/viewform    (sin /e/)
- */
-function buildFormUrls(url) {
-  const eMatch = url.match(/(https:\/\/docs\.google\.com\/forms\/d\/e\/[a-zA-Z0-9_-]+)/);
-  if (eMatch) {
-    return {
-      viewUrl: `${eMatch[1]}/viewform`,
-      submitUrl: `${eMatch[1]}/formResponse`,
-    };
-  }
-  const dMatch = url.match(/(https:\/\/docs\.google\.com\/forms\/d\/[a-zA-Z0-9_-]+)/);
-  if (dMatch) {
-    return {
-      viewUrl: `${dMatch[1]}/viewform`,
-      submitUrl: `${dMatch[1]}/formResponse`,
-    };
-  }
   return null;
-}
-
-/**
- * Parsea la estructura interna del formulario desde FB_PUBLIC_LOAD_DATA_
- * Tipos de pregunta Google Forms:
- * 0 = Respuesta corta (text)
- * 1 = Párrafo (textarea)
- * 2 = Opción múltiple (radio)
- * 3 = Casillas de verificación (checkbox)
- * 4 = Desplegable (dropdown)
- * 5 = Escala lineal
- * 7 = Cuadrícula de opción múltiple
- * 9 = Fecha
- * 10 = Hora
- */
-function parseFormData(fbData) {
-  const questions = [];
-
-  // fbData[1][1] contiene la lista de items del formulario
-  const items = fbData?.[1]?.[1];
-  if (!Array.isArray(items)) return questions;
-
-  // Mapear tipo numérico a string legible
-  const typeMap = {
-    0: 'text',
-    1: 'paragraph',
-    2: 'radio',
-    3: 'checkbox',
-    4: 'dropdown',
-    5: 'scale',
-    7: 'grid',
-    9: 'date',
-    10: 'time',
-  };
-
-  for (const item of items) {
-    // item[1] = título de la pregunta
-    // item[2] = descripción (puede ser null)
-    // item[3] = tipo de pregunta (número) — ¡está a nivel de ITEM, no de field!
-    // item[4] = array de fields (campos de entrada con entry IDs y opciones)
-    const title = item?.[1] || 'Sin título';
-    const description = item?.[2] || '';
-    const itemType = item?.[3]; // El tipo se extrae del item padre
-    const fields = item?.[4];
-
-    if (!Array.isArray(fields)) continue;
-
-    for (const field of fields) {
-      // field[0] = entry ID numérico
-      // field[1] = array de opciones [[valor, null, null, null, 0], ...]
-      // field[2] = flag de requerido (1 = requerido, 0 = opcional)
-      const entryId = field?.[0];
-      const options = [];
-
-      if (Array.isArray(field?.[1])) {
-        for (const opt of field[1]) {
-          if (Array.isArray(opt) && opt[0] !== undefined && opt[0] !== null) {
-            options.push(String(opt[0]));
-          }
-        }
-      }
-
-      const type = typeMap[itemType] || 'unknown';
-      const required = field?.[2] === 1;
-
-      questions.push({
-        id: entryId,
-        entryKey: `entry.${entryId}`,
-        title,
-        description,
-        type,
-        rawType: itemType,
-        options,
-        required,
-      });
-    }
-  }
-
-  return questions;
 }
 
 // ─── Endpoints ───────────────────────────────────────────────────────────────
@@ -173,62 +69,44 @@ function parseFormData(fbData) {
 /**
  * POST /api/analyze
  * Recibe { url } y devuelve la estructura del formulario parseada.
+ * Detecta automáticamente si es Google Forms o Microsoft Forms.
  */
 app.post('/api/analyze', async (req, res) => {
   try {
     const { url: rawUrl } = req.body;
     if (!rawUrl) return res.status(400).json({ error: 'URL requerida' });
 
-    // Resolver URLs cortas (forms.gle, etc.)
-    const resolvedUrl = await resolveUrl(rawUrl.trim());
+    const platform = detectPlatform(rawUrl.trim());
 
-    const urls = buildFormUrls(resolvedUrl);
-    if (!urls) return res.status(400).json({ error: 'URL de Google Forms no válida. URL resuelta: ' + resolvedUrl });
-
-    // Obtener el HTML del formulario
-    const response = await axios.get(urls.viewUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8',
-      },
-    });
-
-    const html = response.data;
-
-    // Extraer FB_PUBLIC_LOAD_DATA_ del HTML
-    const match = html.match(/FB_PUBLIC_LOAD_DATA_\s*=\s*(.*?);\s*<\/script>/s);
-    if (!match) {
-      return res.status(422).json({
-        error: 'No se pudo extraer la estructura del formulario. Verifica que sea público y la URL sea correcta.',
+    if (!platform) {
+      return res.status(400).json({
+        error: 'URL no reconocida. Ingresa una URL válida de Google Forms (docs.google.com/forms/...) o Microsoft Forms (forms.office.com/...).',
       });
     }
 
-    let fbData;
-    try {
-      fbData = JSON.parse(match[1]);
-    } catch {
-      return res.status(422).json({ error: 'Error al parsear los datos del formulario.' });
+    let formData;
+    if (platform === 'google') {
+      formData = await analyzeGoogleForm(rawUrl);
+    } else {
+      formData = await analyzeMicrosoftForm(rawUrl);
     }
-
-    const formTitle = fbData?.[1]?.[8] || fbData?.[3] || 'Formulario sin título';
-    const formDescription = fbData?.[1]?.[0] || '';
-    const questions = parseFormData(fbData);
 
     res.json({
       success: true,
-      form: {
-        title: formTitle,
-        description: formDescription,
-        submitUrl: urls.submitUrl,
-        questionCount: questions.length,
-        questions,
-      },
+      form: formData,
     });
   } catch (err) {
-    console.error('[Analyze Error]', err.message);
+    console.error('[Analyze Error]', err.message || err);
+
+    // Errores lanzados por los módulos con status
+    if (err.status) {
+      return res.status(err.status).json({ error: err.message });
+    }
+
     if (err.response?.status === 404) {
       return res.status(404).json({ error: 'Formulario no encontrado.' });
     }
+
     res.status(500).json({ error: `Error al analizar el formulario: ${err.message}` });
   }
 });
@@ -238,13 +116,15 @@ app.post('/api/analyze', async (req, res) => {
  * Recibe la configuración completa y ejecuta el envío masivo en background.
  * Body: {
  *   submitUrl: string,
+ *   platform: 'google' | 'microsoft',
  *   totalSubmissions: number,
  *   delayMs: number,
- *   questions: [{ entryKey, type, mode, fixedValue, options: [{ value, weight }] }]
+ *   questions: [{ entryKey, type, mode, fixedValue, options: [{ value, weight }] }],
+ *   msFormData?: Object  // Solo para Microsoft Forms
  * }
  */
 app.post('/api/mission/start', (req, res) => {
-  const { submitUrl, totalSubmissions, delayMs, questions } = req.body;
+  const { submitUrl, platform, totalSubmissions, delayMs, questions, msFormData } = req.body;
 
   if (!submitUrl || !questions || !totalSubmissions) {
     return res.status(400).json({ error: 'Configuración incompleta.' });
@@ -256,18 +136,19 @@ app.post('/api/mission/start', (req, res) => {
     status: 'running',
     total: Math.min(totalSubmissions, 500), // Límite de seguridad
     completed: 0,
-    rejected: 0, // Envíos que Google rechazó silenciosamente
+    rejected: 0, // Envíos que el servidor rechazó
     failed: 0,
     errors: [],
     distribution: {}, // Tracking de valores enviados por entryKey
     startedAt: new Date().toISOString(),
+    platform: platform || 'google',
   };
 
   missions.set(missionId, state);
   res.json({ success: true, missionId });
 
   // Ejecutar la misión en background
-  executeMission(state, submitUrl, delayMs || 2000, questions);
+  executeMission(state, submitUrl, delayMs || 2000, questions, platform || 'google', msFormData);
 });
 
 /**
@@ -317,7 +198,7 @@ function generateAnswer(questionConfig) {
     return fixedValue || '';
   }
 
-  // Para preguntas con opciones (radio, dropdown, checkbox, scale)
+  // Para preguntas con opciones (radio, dropdown, checkbox, scale, grid)
   if (!Array.isArray(options) || options.length === 0) {
     return fixedValue || '';
   }
@@ -340,7 +221,7 @@ function generateAnswer(questionConfig) {
     return selected;
   }
 
-  // Radio, dropdown, scale: selección única ponderada
+  // Radio, dropdown, scale, grid: selección única ponderada
   return weightedRandom(options);
 }
 
@@ -364,84 +245,126 @@ function weightedRandom(options) {
 }
 
 /**
- * Ejecuta la misión: envía formularios hasta alcanzar el total de ACEPTADOS.
- * Valida la respuesta de Google y reintenta rechazados/fallidos automáticamente.
- * Límite de seguridad: máximo 3x intentos del total solicitado para evitar bucles infinitos.
+ * Calcula el nivel de concurrencia según el delay configurado.
+ * Con delays altos se envía 1 a la vez (parece más humano).
+ * Con delays bajos se envían varios en paralelo (máximo rendimiento).
  */
-async function executeMission(state, submitUrl, delayMs, questions) {
-  const maxAttempts = state.total * 3; // Límite de seguridad
+function getConcurrency(delayMs) {
+  if (delayMs >= 3000) return 1;
+  if (delayMs >= 1500) return 2;
+  if (delayMs >= 1000) return 3;
+  if (delayMs >= 500) return 5;
+  return 10; // Máximo: 10 concurrent
+}
+
+/**
+ * Ejecuta la misión: envía formularios con concurrencia adaptativa.
+ * Reintenta rechazados/fallidos automáticamente.
+ * Límite de seguridad: máximo 3x intentos del total solicitado.
+ */
+async function executeMission(state, submitUrl, delayMs, questions, platform, msFormData) {
+  const maxAttempts = state.total * 3;
   let attempts = 0;
+  const concurrency = getConcurrency(delayMs);
+
+  // Para Microsoft Forms, refrescar token periódicamente
+  let currentMsData = msFormData ? { ...msFormData } : null;
+  let lastTokenRefresh = Date.now();
+  const TOKEN_REFRESH_INTERVAL = 5 * 60 * 1000; // 5 minutos
+
+  console.log(`[Mission ${state.id}] Iniciando: ${state.total} envíos, platform=${platform}, delay=${delayMs}ms, concurrencia=${concurrency}`);
 
   while (state.completed < state.total && state.status === 'running') {
-    // Límite de seguridad contra bucles infinitos
     if (attempts >= maxAttempts) {
-      state.errors.push({ index: attempts, error: `Límite de intentos alcanzado (${maxAttempts}). Solo ${state.completed}/${state.total} aceptados.` });
+      state.errors.push({
+        index: attempts,
+        error: `Límite de intentos alcanzado (${maxAttempts}). Solo ${state.completed}/${state.total} aceptados.`,
+      });
       break;
     }
 
-    attempts++;
-
-    try {
-      // Construir el payload
-      const params = new URLSearchParams();
-      const sentValues = {}; // Rastrear qué se envía en esta iteración
-
-      for (const q of questions) {
-        if (q.mode === 'skip') continue;
-
-        const answer = generateAnswer(q);
-
-        if (answer === null) continue;
-
-        if (Array.isArray(answer)) {
-          for (const val of answer) {
-            params.append(q.entryKey, val);
-          }
-          sentValues[q.entryKey] = answer.join(', ');
-        } else {
-          params.append(q.entryKey, String(answer));
-          sentValues[q.entryKey] = String(answer);
+    // Refrescar token de Microsoft si ha pasado suficiente tiempo
+    if (platform === 'microsoft' && currentMsData && (Date.now() - lastTokenRefresh) > TOKEN_REFRESH_INTERVAL) {
+      try {
+        const refreshed = await refreshMsToken(currentMsData.resolvedUrl);
+        if (refreshed) {
+          currentMsData.antiForgeryToken = refreshed.antiForgeryToken || currentMsData.antiForgeryToken;
+          currentMsData.cookies = refreshed.cookies || currentMsData.cookies;
+          lastTokenRefresh = Date.now();
+          console.log(`[Mission ${state.id}] Token de Microsoft refrescado.`);
         }
+      } catch {
+        // Continuar con el token actual
+      }
+    }
+
+    // Calcular cuántos envíos lanzar en este batch
+    const remaining = state.total - state.completed;
+    const batchSize = Math.min(concurrency, remaining, maxAttempts - attempts);
+
+    // Lanzar batch de envíos concurrentes
+    const batchPromises = [];
+    for (let b = 0; b < batchSize; b++) {
+      attempts++;
+
+      let submitPromise;
+      if (platform === 'microsoft') {
+        submitPromise = submitMicrosoftForm(submitUrl, questions, generateAnswer, currentMsData)
+          .catch((err) => ({
+            accepted: false,
+            error: err.message,
+            sentValues: {},
+            status: 0,
+          }));
+      } else {
+        submitPromise = submitGoogleForm(submitUrl, questions, generateAnswer)
+          .catch((err) => ({
+            accepted: false,
+            error: err.message,
+            sentValues: {},
+            status: 0,
+          }));
       }
 
-      const response = await axios.post(submitUrl, params.toString(), {
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        },
-        validateStatus: () => true,
-      });
+      batchPromises.push(submitPromise);
+    }
 
-      // Verificar si Google realmente aceptó el envío
-      const html = response.data || '';
-      const isAccepted = typeof html === 'string' && (
-        html.includes('freebirdFormviewerViewResponseConfirmationMessage') ||
-        html.includes('FormResponse') ||
-        response.status === 200
-      );
+    // Esperar resultados del batch
+    const results = await Promise.all(batchPromises);
 
-      if (isAccepted) {
+    for (const result of results) {
+      if (state.status !== 'running') break;
+
+      if (result.error) {
+        // Error de red/timeout
+        state.failed++;
+        if (state.failed <= 5) {
+          state.errors.push({ index: attempts, error: result.error });
+        }
+      } else if (result.accepted) {
         state.completed++;
         // Registrar distribución de valores enviados
-        for (const [key, val] of Object.entries(sentValues)) {
+        for (const [key, val] of Object.entries(result.sentValues)) {
           if (!state.distribution[key]) state.distribution[key] = {};
           state.distribution[key][val] = (state.distribution[key][val] || 0) + 1;
         }
       } else {
         state.rejected++;
-        // No registrar cada rechazo individual para no saturar el array de errores
         if (state.rejected <= 5) {
-          state.errors.push({ index: attempts, error: `Rechazo silencioso (status: ${response.status})` });
+          let errorMsg = `Rechazado por el servidor (status: ${result.status})`;
+          if (result.status === 401) {
+            errorMsg = platform === 'microsoft'
+              ? `Rechazado (status: 401 - El formulario requiere iniciar sesión con cuenta Microsoft)`
+              : `Rechazado (status: 401 - El formulario requiere iniciar sesión / Limitar a 1 respuesta)`;
+          } else if (result.status === 403) {
+            errorMsg = `Rechazado (status: 403 - Acceso denegado. El formulario puede requerir autenticación o estar protegido contra bots)`;
+          }
+          state.errors.push({ index: attempts, error: errorMsg });
         }
-      }
-    } catch (err) {
-      state.failed++;
-      if (state.failed <= 5) {
-        state.errors.push({ index: attempts, error: err.message });
       }
     }
 
-    // Delay entre envíos (excepto si ya se completó)
+    // Delay entre batches (excepto si ya se completó)
     if (state.completed < state.total && state.status === 'running') {
       const jitter = delayMs * (0.7 + Math.random() * 0.6);
       await new Promise((resolve) => setTimeout(resolve, jitter));

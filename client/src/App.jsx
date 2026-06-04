@@ -18,14 +18,14 @@ const TYPE_LABELS = {
   unknown: 'Desconocido',
 };
 
-const HAS_OPTIONS = ['radio', 'checkbox', 'dropdown', 'scale'];
+const HAS_OPTIONS = ['radio', 'checkbox', 'dropdown', 'scale', 'grid'];
 const HAS_TEXT = ['text', 'paragraph'];
 
 // ─── Paleta de colores para opciones ─────────────────────────────────────────
 const OPTION_COLORS = [
-  '#6366f1', '#8b5cf6', '#06b6d4', '#10b981', '#f59e0b',
-  '#f43f5e', '#ec4899', '#14b8a6', '#f97316', '#84cc16',
-  '#a78bfa', '#22d3ee', '#34d399', '#fbbf24', '#fb7185',
+  '#ff8c00', '#ffaa33', '#ff6b00', '#ffc266', '#e67700',
+  '#cc5500', '#ffb84d', '#ff9933', '#e68a00', '#ffd699',
+  '#ff7700', '#ffcc80', '#e65c00', '#ffbf66', '#cc6600',
 ];
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -136,19 +136,28 @@ function QuestionConfigurator({ question, config, onChange }) {
     modes.push({ value: 'skip', label: 'Omitir' });
   }
 
+  // Para grid rows, mostrar el rowLabel como título
+  const displayTitle = question.rowLabel || question.title;
+  const isGridRow = question.type === 'grid';
+
   return (
-    <div className="question-card">
+    <div className={`question-card ${isGridRow ? 'grid-row-card' : ''}`}>
       <div className="question-header">
         <div className="question-title-group">
-          <div className="question-title">{question.title}</div>
-          <div className="question-meta-row">
-            <span className={`type-badge ${question.type}`}>
-              {TYPE_LABELS[question.type] || question.type}
-            </span>
-            {question.required && (
-              <span className="type-badge required">Requerida</span>
-            )}
+          <div className="question-title">
+            {isGridRow && <span className="grid-row-indicator">↳</span>}
+            {displayTitle}
           </div>
+          {!isGridRow && (
+            <div className="question-meta-row">
+              <span className={`type-badge ${question.type}`}>
+                {TYPE_LABELS[question.type] || question.type}
+              </span>
+              {question.required && (
+                <span className="type-badge required">Requerida</span>
+              )}
+            </div>
+          )}
         </div>
         <div className="mode-selector">
           <select value={config.mode} onChange={handleModeChange}>
@@ -375,7 +384,7 @@ function ProgressMonitor({ missionId, onComplete }) {
           {state.status === 'running' && <span className="pulse" />}
           {state.status === 'running' ? 'Enviando...' : state.status === 'completed' ? 'Completado' : 'Detenido'}
         </span>
-        <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--accent-indigo)', fontVariantNumeric: 'tabular-nums' }}>
+        <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--accent-orange)', fontVariantNumeric: 'tabular-nums' }}>
           {percent}%
         </span>
       </div>
@@ -407,6 +416,20 @@ function ProgressMonitor({ missionId, onComplete }) {
         )}
       </div>
 
+      {/* Errores detectados */}
+      {state.errors && state.errors.length > 0 && (
+        <div style={{ marginTop: '0.75rem', padding: '0.75rem', backgroundColor: 'rgba(239, 68, 68, 0.08)', border: '1px solid rgba(239, 68, 68, 0.15)', borderRadius: 'var(--radius-sm)' }}>
+          <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--accent-rose)', marginBottom: '0.25rem' }}>
+            Errores detectados:
+          </div>
+          <ul style={{ margin: 0, paddingLeft: '1.2rem', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+            {Array.from(new Set(state.errors.map(e => e.error))).map((err, idx) => (
+              <li key={idx}>{err}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {/* Distribución de valores enviados */}
       {state.distribution && Object.keys(state.distribution).length > 0 && state.status !== 'running' && (
         <div style={{ marginTop: '1rem', padding: '0.75rem', background: 'var(--bg-input)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
@@ -420,10 +443,10 @@ function ProgressMonitor({ missionId, onComplete }) {
                 return (
                   <div key={val} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem' }}>
                     <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', minWidth: '80px' }}>{val}</span>
-                    <div style={{ flex: 1, height: '4px', background: 'rgba(99,102,241,0.1)', borderRadius: '2px', overflow: 'hidden' }}>
-                      <div style={{ width: `${pct}%`, height: '100%', background: 'var(--gradient-primary)', borderRadius: '2px' }} />
+                    <div style={{ flex: 1, height: '4px', background: 'rgba(255,140,0,0.08)', borderRadius: '2px', overflow: 'hidden' }}>
+                      <div style={{ width: `${pct}%`, height: '100%', background: 'var(--accent-orange)', borderRadius: '2px' }} />
                     </div>
-                    <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--accent-indigo)', minWidth: '60px', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                    <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--accent-orange)', minWidth: '60px', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
                       {count} ({pct}%)
                     </span>
                   </div>
@@ -461,7 +484,7 @@ function App() {
     setMissionActive(false);
 
     if (!url.trim()) {
-      setError('Ingresa una URL de Google Forms.');
+      setError('Ingresa una URL de Google Forms o Microsoft Forms.');
       return;
     }
 
@@ -532,6 +555,48 @@ function App() {
     });
   }, []);
 
+  // ── Aplicar modo global a todas las preguntas ──
+  const applyGlobalMode = useCallback((globalMode) => {
+    if (!form) return;
+    setConfigs((prev) => {
+      return prev.map((c, i) => {
+        const q = form.questions[i];
+        const isOptionType = HAS_OPTIONS.includes(q.type);
+        const isTextType = HAS_TEXT.includes(q.type);
+
+        if (globalMode === 'random') {
+          if (isOptionType) return { ...c, mode: 'random' };
+          if (isTextType) return { ...c, mode: 'fixed' };
+          return { ...c, mode: 'skip' };
+        }
+        if (globalMode === 'weighted') {
+          if (isOptionType) {
+            // Asegurar que haya pesos equitativos si todos son 0
+            const totalW = c.options.reduce((s, o) => s + (Number(o.weight) || 0), 0);
+            if (totalW === 0 && c.options.length > 0) {
+              const eq = Math.floor(100 / c.options.length);
+              const remainder = 100 - eq * c.options.length;
+              return {
+                ...c,
+                mode: 'weighted',
+                options: c.options.map((o, idx) => ({ ...o, weight: eq + (idx < remainder ? 1 : 0) })),
+              };
+            }
+            return { ...c, mode: 'weighted' };
+          }
+          if (isTextType) return { ...c, mode: 'fixed' };
+          return { ...c, mode: 'skip' };
+        }
+        if (globalMode === 'fixed') {
+          if (isOptionType) return { ...c, mode: 'fixed' };
+          if (isTextType) return { ...c, mode: 'fixed' };
+          return { ...c, mode: 'fixed' };
+        }
+        return c;
+      });
+    });
+  }, [form]);
+
   // ── Iniciar misión ──
   const handleStartMission = async () => {
     if (!form) return;
@@ -582,9 +647,11 @@ function App() {
     try {
       const { data } = await axios.post(`${API}/mission/start`, {
         submitUrl: form.submitUrl,
+        platform: form.platform || 'google',
         totalSubmissions: Number(totalSubmissions),
         delayMs: Number(delayMs),
         questions: questionsPayload,
+        ...(form._msFormData && { msFormData: form._msFormData }),
       });
 
       if (data.success) {
@@ -621,7 +688,7 @@ function App() {
       {/* ── Header ── */}
       <header className="app-header">
         <h1>Forms Automator</h1>
-        <p>Analiza, configura y ejecuta envíos automáticos</p>
+        <p>Analiza, configura y ejecuta envíos automáticos — Google Forms y Microsoft Forms</p>
       </header>
 
       {/* ── URL Input ── */}
@@ -634,7 +701,7 @@ function App() {
           <input
             id="url-input"
             type="url"
-            placeholder="https://docs.google.com/forms/d/e/..."
+            placeholder="Pega la URL de Google Forms o Microsoft Forms..."
             value={url}
             onChange={(e) => setUrl(e.target.value)}
             onKeyDown={handleKeyDown}
@@ -671,6 +738,16 @@ function App() {
                 {form.description && <p>{form.description}</p>}
               </div>
               <div className="form-meta">
+                {form.platform && (
+                  <span className={`platform-badge ${form.platform}`}>
+                    {form.platform === 'google' ? (
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+                    ) : (
+                      <svg viewBox="0 0 24 24" fill="currentColor"><rect x="1" y="1" width="10" height="10"/><rect x="13" y="1" width="10" height="10"/><rect x="1" y="13" width="10" height="10"/><rect x="13" y="13" width="10" height="10"/></svg>
+                    )}
+                    {form.platform === 'google' ? 'Google Forms' : 'Microsoft Forms'}
+                  </span>
+                )}
                 <span className="meta-badge">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14,2 14,8 20,8"/></svg>
                   {form.questionCount} preguntas
@@ -678,16 +755,112 @@ function App() {
               </div>
             </div>
 
-            {/* Lista de preguntas configurables */}
+            {/* ── Botones globales de modo ── */}
+            <div className="global-mode-bar">
+              <span className="global-mode-label">Modo global:</span>
+              <button
+                className="global-mode-btn random"
+                onClick={() => applyGlobalMode('random')}
+                title="Todas las preguntas con opciones se llenan aleatoriamente"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="1" y="1" width="22" height="22" rx="4"/>
+                  <circle cx="8" cy="8" r="1.5" fill="currentColor"/>
+                  <circle cx="16" cy="8" r="1.5" fill="currentColor"/>
+                  <circle cx="8" cy="16" r="1.5" fill="currentColor"/>
+                  <circle cx="16" cy="16" r="1.5" fill="currentColor"/>
+                  <circle cx="12" cy="12" r="1.5" fill="currentColor"/>
+                </svg>
+                Aleatorio
+              </button>
+              <button
+                className="global-mode-btn weighted"
+                onClick={() => applyGlobalMode('weighted')}
+                title="Todas las preguntas con opciones usan distribución ponderada"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="4" y1="21" x2="4" y2="6"/>
+                  <line x1="12" y1="21" x2="12" y2="11"/>
+                  <line x1="20" y1="21" x2="20" y2="16"/>
+                </svg>
+                Ponderado
+              </button>
+              <button
+                className="global-mode-btn fixed"
+                onClick={() => applyGlobalMode('fixed')}
+                title="Todas las preguntas se establecen en modo fijo"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 2L12 12"/>
+                  <path d="M17 7L12 12 7 7"/>
+                  <line x1="5" y1="22" x2="19" y2="22"/>
+                </svg>
+                Fijo
+              </button>
+            </div>
+
+            {/* Lista de preguntas configurables con agrupación de grids */}
             <div className="question-list">
-              {form.questions.map((q, i) => (
-                <QuestionConfigurator
-                  key={q.id}
-                  question={q}
-                  config={configs[i]}
-                  onChange={(newConfig) => updateConfig(i, newConfig)}
-                />
-              ))}
+              {(() => {
+                const rendered = [];
+                let i = 0;
+                while (i < form.questions.length) {
+                  const idx = i; // Capturar índice para closures
+                  const q = form.questions[idx];
+                  // Detectar grupo de cuadrícula
+                  if (q.type === 'grid' && q.gridTitle) {
+                    const gridTitle = q.gridTitle;
+                    const gridRows = [];
+                    let j = i;
+                    while (j < form.questions.length && form.questions[j].type === 'grid' && form.questions[j].gridTitle === gridTitle) {
+                      gridRows.push(j);
+                      j++;
+                    }
+                    rendered.push(
+                      <div key={`grid-${idx}`} className="grid-group">
+                        <div className="grid-group-header">
+                          <div className="grid-group-title">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <rect x="3" y="3" width="7" height="7"/>
+                              <rect x="14" y="3" width="7" height="7"/>
+                              <rect x="3" y="14" width="7" height="7"/>
+                              <rect x="14" y="14" width="7" height="7"/>
+                            </svg>
+                            {gridTitle}
+                          </div>
+                          <div className="grid-group-meta">
+                            <span className="type-badge grid">Cuadrícula</span>
+                            <span className="grid-row-count">{gridRows.length} filas × {q.options.length} columnas</span>
+                            {q.required && <span className="type-badge required">Requerida</span>}
+                          </div>
+                        </div>
+                        <div className="grid-rows">
+                          {gridRows.map((ri) => (
+                            <QuestionConfigurator
+                              key={form.questions[ri].id}
+                              question={form.questions[ri]}
+                              config={configs[ri]}
+                              onChange={(newConfig) => updateConfig(ri, newConfig)}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    );
+                    i = j;
+                  } else {
+                    rendered.push(
+                      <QuestionConfigurator
+                        key={q.id}
+                        question={q}
+                        config={configs[idx]}
+                        onChange={(newConfig) => updateConfig(idx, newConfig)}
+                      />
+                    );
+                    i++;
+                  }
+                }
+                return rendered;
+              })()}
             </div>
           </div>
 
@@ -715,9 +888,9 @@ function App() {
                 <input
                   id="delay-ms"
                   type="number"
-                  min="500"
+                  min="100"
                   max="30000"
-                  step="500"
+                  step="100"
                   value={delayMs}
                   onChange={(e) => setDelayMs(e.target.value)}
                   disabled={missionActive}

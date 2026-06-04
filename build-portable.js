@@ -67,7 +67,7 @@ console.log(`  ✓ Directorio: ${OUTPUT_DIR}`);
 // ── Paso 3: Bundlear servidor con esbuild (ESM → CJS) ───────────────────────
 console.log('\n[3/5] Bundleando servidor (ESM → CJS con esbuild)...');
 run(
-  `npx -y esbuild "${path.join(SERVER_DIR, 'index.js')}" --bundle --platform=node --target=node20 --format=cjs --outfile="${SERVER_BUNDLE}" --external:child_process --external:node:sqlite --log-level=warning`,
+  `npx -y esbuild "${path.join(SERVER_DIR, 'index.js')}" --bundle --platform=node --target=node24 --format=cjs --outfile="${SERVER_BUNDLE}" --external:child_process --external:node:sqlite --log-level=warning`,
   __dirname
 );
 
@@ -86,7 +86,7 @@ const pkgConfig = {
   version: '1.0.0',
   main: 'server-bundle.cjs',
   pkg: {
-    targets: ['node20-win-x64'],
+    targets: ['node24-win-x64'],
     outputPath: 'FormsAutomator.exe',
     external: ['node:sqlite'],
   },
@@ -95,7 +95,7 @@ const pkgConfigPath = path.join(OUTPUT_DIR, 'package.json');
 fs.writeFileSync(pkgConfigPath, JSON.stringify(pkgConfig, null, 2));
 
 run(
-  `npx -y @yao-pkg/pkg "${SERVER_BUNDLE}" --config "${pkgConfigPath}" --targets node20-win-x64 --output "${path.join(OUTPUT_DIR, 'FormsAutomator.exe')}"`,
+  `npx -y @yao-pkg/pkg "${SERVER_BUNDLE}" --config "${pkgConfigPath}" --targets node24-win-x64 --output "${path.join(OUTPUT_DIR, 'FormsAutomator.exe')}"`,
   __dirname
 );
 
